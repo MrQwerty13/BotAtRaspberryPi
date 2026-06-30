@@ -1,71 +1,81 @@
-from aiogram import Bot, Dispatcher
-from aiogram.filters import Command
-from aiogram.types import Message
 import asyncio
 import json
 import os
-import aiohttp
 
-TOKEN = "8597322482:AAFFq5D2MSmIlo_gBBrVaDVXK8ddpezYmXU"
+import aiohttp
+from aiohttp_socks import ProxyConnector
+
+from aiogram import Bot, Dispatcher
+from aiogram.filters import Command
+from aiogram.types import Message
+from aiogram.client.session.aiohttp import AiohttpSession
+
+# ================= CONFIG =================
+
+TOKEN = "YOUR_TOKEN"
 OLLAMA_URL = "http://localhost:11434/api/chat"
-MODEL = "tinyllama"
+MODEL = "llama3.1"
 
 DATA_DIR = "users"
+MAX_HISTORY = 20
 
-bot = Bot(TOKEN)
+# SOCKS5 (Telegram)
+connector = ProxyConnector.from_url("socks5://127.0.0.1:1080")
+session = AiohttpSession(connector=connector)
+
+bot = Bot(TOKEN, session=session)
 dp = Dispatcher()
 
+os.makedirs(DATA_DIR, exist_ok=True)
 
-# ---------- utils ----------
+# ================= STORAGE =================
 
-def get_user_file(user_id: int):
+def path(user_id: int):
     return f"{DATA_DIR}/{user_id}.json"
 
 
-def load_user(user_id: int):
-    path = get_user_file(user_id)
+def load(user_id: int):
+    p = path(user_id)
 
-    if not os.path.exists(path):
+    if not os.path.exists(p):
         return {"messages": [], "notes": []}
 
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"messages": [], "notes": []}
 
 
-def save_user(user_id: int, data: dict):
-    path = get_user_file(user_id)
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+def save(user_id: int, data: dict):
+    with open(path(user_id), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-# ---------- start ----------
+# ================= START =================
 
 @dp.message(Command("start"))
 async def start(message: Message):
     user_id = message.from_user.id
+    load(user_id)  # просто инициализация файла
+    save(user_id, load(user_id))
 
-    data = load_user(user_id)
-    save_user(user_id, data)
-
-    await message.answer("Бот запущен. Контекст создан.")
+    await message.answer("Бот запущен. Память активирована.")
 
 
-# ---------- help ----------
+# ================= HELP =================
 
 @dp.message(Command("help"))
 async def help_cmd(message: Message):
     await message.answer(
-        "/start\n"
-        "/help\n"
+        "/ai <text>\n"
         "/note <text>\n"
         "/notes\n"
         "/d_note <id>\n"
-        "/ai <prompt>"
     )
 
 
-# ---------- notes ----------
+# ================= NOTES =================
 
 @dp.message(Command("note"))
 async def note(message: Message):
@@ -73,11 +83,11 @@ async def note(message: Message):
     text = message.text.removeprefix("/note").strip()
 
     if not text:
-        return await message.answer("Введите заметку")
+        return await message.answer("Введите текст заметки")
 
-    data = load_user(user_id)
+    data = load(user_id)
     data["notes"].append(text)
-    save_user(user_id, data)
+    save(user_id, data)
 
     await message.answer("Сохранено")
 
@@ -85,14 +95,12 @@ async def note(message: Message):
 @dp.message(Command("notes"))
 async def notes(message: Message):
     user_id = message.from_user.id
-    data = load_user(user_id)
+    data = load(user_id)
 
-    notes = data.get("notes", [])
+    if not data["notes"]:
+        return await message.answer("Заметок нет")
 
-    if not notes:
-        return await message.answer("Пусто")
-
-    text = "\n".join(f"{i+1}. {n}" for i, n in enumerate(notes))
+    text = "\n".join(f"{i+1}. {n}" for i, n in enumerate(data["notes"]))
     await message.answer(text)
 
 
@@ -102,25 +110,25 @@ async def delete_note(message: Message):
     args = message.text.split()
 
     if len(args) < 2:
-        return await message.answer("Используй /d_note 1")
+        return await message.answer("Используй: /d_note 1")
 
     try:
         idx = int(args[1]) - 1
     except ValueError:
-        return await message.answer("Неверный номер")
+        return await message.answer("Неверный индекс")
 
-    data = load_user(user_id)
+    data = load(user_id)
 
     if idx < 0 or idx >= len(data["notes"]):
         return await message.answer("Нет такой заметки")
 
     removed = data["notes"].pop(idx)
-    save_user(user_id, data)
+    save(user_id, data)
 
     await message.answer(f"Удалено: {removed}")
 
 
-# ---------- AI (OLLAMA + MEMORY) ----------
+# ================= AI (OLLAMA) =================
 
 @dp.message(Command("ai"))
 async def ai(message: Message):
@@ -128,12 +136,17 @@ async def ai(message: Message):
     prompt = message.text.removeprefix("/ai").strip()
 
     if not prompt:
-        return await message.answer("Напиши: /ai вопрос")
+        return await message.answer("Используй: /ai вопрос")
 
-    data = load_user(user_id)
+    data = load(user_id)
 
-    # добавляем сообщение пользователя
-    data["messages"].append({"role": "user", "content": prompt})
+    # ограничиваем память
+    data["messages"] = data["messages"][-MAX_HISTORY:]
+
+    data["messages"].append({
+        "role": "user",
+        "content": prompt
+    })
 
     payload = {
         "model": MODEL,
@@ -142,15 +155,18 @@ async def ai(message: Message):
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(OLLAMA_URL, json=payload) as resp:
-                result = await resp.json()
+        async with aiohttp.ClientSession() as s:
+            async with s.post(OLLAMA_URL, json=payload, timeout=60) as r:
+                result = await r.json()
 
-        answer = result["message"]["content"]
+        answer = result.get("message", {}).get("content", "Нет ответа")
 
-        # сохраняем ответ ассистента
-        data["messages"].append({"role": "assistant", "content": answer})
-        save_user(user_id, data)
+        data["messages"].append({
+            "role": "assistant",
+            "content": answer
+        })
+
+        save(user_id, data)
 
         await message.answer(answer)
 
@@ -158,20 +174,19 @@ async def ai(message: Message):
         await message.answer(f"Ollama error: {e}")
 
 
-# ---------- fallback ----------
+# ================= FALLBACK =================
 
 @dp.message()
 async def fallback(message: Message):
-    if message.text.startswith("/"):
+    if not message.text or message.text.startswith("/"):
         return
 
     await message.answer("Используй /ai для общения с ИИ")
 
 
-# ---------- run ----------
+# ================= RUN =================
 
 async def main():
-    os.makedirs(DATA_DIR, exist_ok=True)
     await dp.start_polling(bot)
 
 
