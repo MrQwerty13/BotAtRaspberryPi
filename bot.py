@@ -19,11 +19,7 @@ MODEL = "llama3.1"
 DATA_DIR = "users"
 MAX_HISTORY = 20
 
-# SOCKS5 (Telegram)
-connector = ProxyConnector.from_url("socks5://127.0.0.1:1080")
-session = AiohttpSession(connector=connector)
-
-bot = Bot(TOKEN, session=session)
+bot = Bot(TOKEN)
 dp = Dispatcher()
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -187,6 +183,18 @@ async def fallback(message: Message):
 # ================= RUN =================
 
 async def main():
+    from aiohttp_socks import ProxyConnector
+    from aiogram.client.session.aiohttp import AiohttpSession
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    connector = ProxyConnector.from_url("socks5://127.0.0.1:1080")
+    session = AiohttpSession(connector=connector)
+
+    # переинициализация бота с прокси-сессией
+    global bot
+    bot = Bot(TOKEN, session=session)
+
     await dp.start_polling(bot)
 
 
