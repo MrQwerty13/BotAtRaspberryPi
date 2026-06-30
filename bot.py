@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
 
-TOKEN = "YOUR_TOKEN"
+TOKEN = "8597322482:AAFFq5D2MSmIlo_gBBrVaDVXK8ddpezYmXU"
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "llama3.1"
 
