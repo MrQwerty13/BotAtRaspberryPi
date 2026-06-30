@@ -2,13 +2,13 @@ import asyncio
 import json
 import os
 
-import aiohttp
-from aiohttp_socks import ProxyConnector
-
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.client.session.aiohttp import AiohttpSession
+
+import aiohttp
+from aiohttp_socks import ProxyConnector
 
 # ================= CONFIG =================
 
@@ -183,19 +183,20 @@ async def fallback(message: Message):
 # ================= RUN =================
 
 async def main():
-    from aiohttp_socks import ProxyConnector
-    from aiogram.client.session.aiohttp import AiohttpSession
-
     os.makedirs(DATA_DIR, exist_ok=True)
 
     connector = ProxyConnector.from_url("socks5://127.0.0.1:1080")
-    session = AiohttpSession(connector=connector)
 
-    # переинициализация бота с прокси-сессией
+    # правильная aiohttp сессия
+    http_session = aiohttp.ClientSession(connector=connector)
+
     global bot
-    bot = Bot(TOKEN, session=session)
+    bot = Bot(TOKEN, session=http_session)
 
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await http_session.close()
 
 
 if __name__ == "__main__":
