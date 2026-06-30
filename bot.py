@@ -1,18 +1,13 @@
 import asyncio
 import json
 import os
+import aiohttp
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
-from aiogram.client.session.aiohttp import AiohttpSession
 
-import aiohttp
-from aiohttp_socks import ProxyConnector
-
-# ================= CONFIG =================
-
-TOKEN = "8597322482:AAFFq5D2MSmIlo_gBBrVaDVXK8ddpezYmXU"
+TOKEN = "YOUR_TOKEN"
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "llama3.1"
 
@@ -23,6 +18,7 @@ bot = Bot(TOKEN)
 dp = Dispatcher()
 
 os.makedirs(DATA_DIR, exist_ok=True)
+
 
 # ================= STORAGE =================
 
@@ -39,7 +35,7 @@ def load(user_id: int):
     try:
         with open(p, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except:
         return {"messages": [], "notes": []}
 
 
@@ -53,22 +49,8 @@ def save(user_id: int, data: dict):
 @dp.message(Command("start"))
 async def start(message: Message):
     user_id = message.from_user.id
-    load(user_id)  # просто инициализация файла
-    save(user_id, load(user_id))
-
-    await message.answer("Бот запущен. Память активирована.")
-
-
-# ================= HELP =================
-
-@dp.message(Command("help"))
-async def help_cmd(message: Message):
-    await message.answer(
-        "/ai <text>\n"
-        "/note <text>\n"
-        "/notes\n"
-        "/d_note <id>\n"
-    )
+    load(user_id)
+    await message.answer("Бот запущен")
 
 
 # ================= NOTES =================
@@ -79,7 +61,7 @@ async def note(message: Message):
     text = message.text.removeprefix("/note").strip()
 
     if not text:
-        return await message.answer("Введите текст заметки")
+        return await message.answer("Введите заметку")
 
     data = load(user_id)
     data["notes"].append(text)
@@ -94,10 +76,11 @@ async def notes(message: Message):
     data = load(user_id)
 
     if not data["notes"]:
-        return await message.answer("Заметок нет")
+        return await message.answer("Пусто")
 
-    text = "\n".join(f"{i+1}. {n}" for i, n in enumerate(data["notes"]))
-    await message.answer(text)
+    await message.answer(
+        "\n".join(f"{i+1}. {n}" for i, n in enumerate(data["notes"]))
+    )
 
 
 @dp.message(Command("d_note"))
@@ -106,12 +89,12 @@ async def delete_note(message: Message):
     args = message.text.split()
 
     if len(args) < 2:
-        return await message.answer("Используй: /d_note 1")
+        return await message.answer("Используй /d_note 1")
 
     try:
         idx = int(args[1]) - 1
-    except ValueError:
-        return await message.answer("Неверный индекс")
+    except:
+        return await message.answer("Ошибка")
 
     data = load(user_id)
 
@@ -124,7 +107,7 @@ async def delete_note(message: Message):
     await message.answer(f"Удалено: {removed}")
 
 
-# ================= AI (OLLAMA) =================
+# ================= AI =================
 
 @dp.message(Command("ai"))
 async def ai(message: Message):
@@ -132,17 +115,13 @@ async def ai(message: Message):
     prompt = message.text.removeprefix("/ai").strip()
 
     if not prompt:
-        return await message.answer("Используй: /ai вопрос")
+        return await message.answer("Используй /ai вопрос")
 
     data = load(user_id)
 
-    # ограничиваем память
     data["messages"] = data["messages"][-MAX_HISTORY:]
 
-    data["messages"].append({
-        "role": "user",
-        "content": prompt
-    })
+    data["messages"].append({"role": "user", "content": prompt})
 
     payload = {
         "model": MODEL,
@@ -151,17 +130,13 @@ async def ai(message: Message):
     }
 
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(OLLAMA_URL, json=payload, timeout=60) as r:
-                result = await r.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.post(OLLAMA_URL, json=payload, timeout=60) as resp:
+                result = await resp.json()
 
         answer = result.get("message", {}).get("content", "Нет ответа")
 
-        data["messages"].append({
-            "role": "assistant",
-            "content": answer
-        })
-
+        data["messages"].append({"role": "assistant", "content": answer})
         save(user_id, data)
 
         await message.answer(answer)
@@ -174,29 +149,16 @@ async def ai(message: Message):
 
 @dp.message()
 async def fallback(message: Message):
-    if not message.text or message.text.startswith("/"):
+    if message.text and message.text.startswith("/"):
         return
 
-    await message.answer("Используй /ai для общения с ИИ")
+    await message.answer("Используй /ai")
 
 
 # ================= RUN =================
 
 async def main():
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-    connector = ProxyConnector.from_url("socks5://127.0.0.1:1080")
-
-    # правильная aiohttp сессия
-    http_session = aiohttp.ClientSession(connector=connector)
-
-    global bot
-    bot = Bot(TOKEN, session=http_session)
-
-    try:
-        await dp.start_polling(bot)
-    finally:
-        await http_session.close()
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
